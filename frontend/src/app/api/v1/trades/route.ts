@@ -1,0 +1,105 @@
+import { NextResponse } from 'next/server';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const strategyId = searchParams.get('strategyId');
+
+  const mockTrades = [
+    {
+      id: 'TX001',
+      txHash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+      blockNumber: 12345678,
+      timestamp: Date.now() - 120000,
+      strategy: 'Cross-DEX Spread',
+      tokenA: { symbol: 'WETH', address: '0x...' },
+      tokenB: { symbol: 'USDC', address: '0x...' },
+      amountIn: '1.5',
+      amountOut: '5768.25',
+      profit: '0.0234',
+      gasUsed: 180000,
+      gasCost: '0.0012',
+      buyDex: 'Merchant Moe',
+      sellDex: 'FusionX',
+      usedFlashLoan: false,
+      status: 'success',
+    },
+    {
+      id: 'TX002',
+      txHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      blockNumber: 12345670,
+      timestamp: Date.now() - 300000,
+      strategy: 'Triangular Arbitrage',
+      tokenA: { symbol: 'WMNT', address: '0x...' },
+      tokenB: { symbol: 'USDT', address: '0x...' },
+      amountIn: '1000',
+      amountOut: '1234.56',
+      profit: '-0.0012',
+      gasUsed: 120000,
+      gasCost: '0.0008',
+      buyDex: 'Agni',
+      sellDex: 'CyberSwap',
+      usedFlashLoan: false,
+      status: 'failed',
+    },
+    {
+      id: 'TX003',
+      txHash: '0x7890123456abcdef7890123456abcdef7890123456abcdef7890123456abcdef',
+      blockNumber: 12345660,
+      timestamp: Date.now() - 480000,
+      strategy: 'Flash Loan Arbitrage',
+      tokenA: { symbol: 'WBTC', address: '0x...' },
+      tokenB: { symbol: 'WETH', address: '0x...' },
+      amountIn: '0.1',
+      amountOut: '2.73',
+      profit: '0.0456',
+      gasUsed: 250000,
+      gasCost: '0.0015',
+      buyDex: 'Helix',
+      sellDex: 'iZiSwap',
+      usedFlashLoan: true,
+      status: 'success',
+    },
+    {
+      id: 'TX004',
+      txHash: '0xdef0123456abcdef7890123456abcdef7890123456abcdef7890123456abcdef',
+      blockNumber: 12345650,
+      timestamp: Date.now() - 720000,
+      strategy: 'Cross-DEX Spread',
+      tokenA: { symbol: 'WETH', address: '0x...' },
+      tokenB: { symbol: 'USDC', address: '0x...' },
+      amountIn: '2.0',
+      amountOut: '7690.24',
+      profit: '0.0189',
+      gasUsed: 175000,
+      gasCost: '0.0011',
+      buyDex: 'FusionX',
+      sellDex: 'Merchant Moe',
+      usedFlashLoan: false,
+      status: 'success',
+    },
+    {
+      id: 'TX005',
+      txHash: '0x456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123',
+      blockNumber: 12345640,
+      timestamp: Date.now() - 900000,
+      strategy: 'Statistical Arbitrage',
+      tokenA: { symbol: 'USDC', address: '0x...' },
+      tokenB: { symbol: 'USDT', address: '0x...' },
+      amountIn: '5000',
+      amountOut: '5002.50',
+      profit: '0.0034',
+      gasUsed: 90000,
+      gasCost: '0.0006',
+      buyDex: 'Merchant Moe',
+      sellDex: 'Agni',
+      usedFlashLoan: false,
+      status: 'success',
+    },
+  ];
+
+  const filtered = strategyId
+    ? mockTrades.filter((t) => t.strategy.toLowerCase().includes(strategyId))
+    : mockTrades;
+
+  return NextResponse.json(filtered);
+}
