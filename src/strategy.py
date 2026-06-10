@@ -141,6 +141,16 @@ class Config:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     AI_MODEL = "gpt-4o-mini"
 
+    @classmethod
+    def validate_keys(cls):
+        """✅ Validate that sensitive keys are properly configured via env vars"""
+        warnings = []
+        if cls.OPENAI_API_KEY and cls.OPENAI_API_KEY in ("your_openai_api_key", "sk-xxx", ""):
+            warnings.append("OPENAI_API_KEY appears to be a placeholder or empty")
+        if os.getenv("PRIVATE_KEY") in ("your_private_key_here", None, ""):
+            warnings.append("PRIVATE_KEY is not configured")
+        return warnings
+
     # Backtesting
     BACKTEST_INITIAL_BALANCE = 10000  # $10,000 starting balance
     BACKTEST_COMMISSION_BPS = 30  # 0.3% DEX commission

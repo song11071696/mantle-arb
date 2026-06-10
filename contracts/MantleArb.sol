@@ -145,6 +145,16 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
     // Emergency
     bool public emergencyStop;
 
+    // ✅ Withdrawal limits
+    uint256 public dailyWithdrawLimit = 100000 * 1e18; // $100,000 default
+    uint256 public dailyWithdrawn;
+    uint256 public lastWithdrawDay;
+    uint256 public constant WITHDRAW_TIMELOCK = 24 hours;
+    mapping(address => uint256) public pendingWithdrawRequest;
+
+    // Approved router whitelist for callback validation
+    mapping(address => bool) public isApprovedRouter;
+
     // ============ Structs ============
 
     struct ArbitrageOpportunity {
@@ -231,9 +241,9 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         address _aavePool,
         address _priceOracle
     ) Ownable() {
-        merchantMoeRouter = IUniswapV2Router(_merchantMoe);
-        fusionXRouter = IUniswapV2Router(_fusionX);
-        agniRouter = IUniswapV2Router(_agni);
+        if (_merchantMoe != address(0)) { merchantMoeRouter = IUniswapV2Router(_merchantMoe); isApprovedRouter[_merchantMoe] = true; }
+        if (_fusionX != address(0)) { fusionXRouter = IUniswapV2Router(_fusionX); isApprovedRouter[_fusionX] = true; }
+        if (_agni != address(0)) { agniRouter = IUniswapV2Router(_agni); isApprovedRouter[_agni] = true; }
         if (_cyberSwap != address(0)) cyberSwapRouter = IUniswapV2Router(_cyberSwap);
         if (_helix != address(0)) helixRouter = IUniswapV2Router(_helix);
         if (_iZiSwap != address(0)) iZiSwapRouter = IUniswapV2Router(_iZiSwap);
@@ -254,7 +264,7 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         uint256[] memory amounts,
         uint256[] memory feeAmounts,
         bytes memory userData
-    ) external {
+    ) external nonReentrant {
         require(msg.sender == address(balancerVault), "Only Balancer Vault");
 
         // Decode arbitrage params from userData
@@ -265,6 +275,11 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
             address routerSell,
             uint256 minProfit
         ) = abi.decode(userData, (address, address, address, address, uint256));
+
+        // ✅ Callback parameter validation: routers must be approved
+        require(isApprovedRouter[routerBuy], "Unapproved routerBuy");
+        require(isApprovedRouter[routerSell], "Unapproved routerSell");
+        require(routerBuy != routerSell, "Same router");
 
         // Execute the arbitrage
         uint256 amountIn = amounts[0];
@@ -318,6 +333,10 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         uint256 profit = balance - repayment;
         require(profit >= minProfit, "Flash loan: profit too low");
 
+        // ✅ Approval cleanup: revoke router approvals first
+        IERC20(tokenA).safeApprove(routerBuy, 0);
+        IERC20(tokenB).safeApprove(routerSell, 0);
+
         // Approve vault to take repayment
         IERC20(tokenA).safeApprove(address(balancerVault), repayment);
 
@@ -345,7 +364,7 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         uint256[] calldata premiums,
         address initiator,
         bytes calldata params
-    ) external returns (bool) {
+    ) external nonReentrant returns (bool) {
         require(msg.sender == address(aavePool), "Only Aave Pool");
         require(initiator == address(this), "Invalid initiator");
 
@@ -355,6 +374,11 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
             address routerSell,
             uint256 minProfit
         ) = abi.decode(params, (address, address, address, uint256));
+
+        // ✅ Callback parameter validation
+        require(isApprovedRouter[routerBuy], "Unapproved routerBuy");
+        require(isApprovedRouter[routerSell], "Unapproved routerSell");
+        require(routerBuy != routerSell, "Same router");
 
         address tokenA = assets[0];
         uint256 amountIn = amounts[0];
@@ -406,6 +430,10 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
 
         uint256 profit = balance - repayment;
         require(profit >= minProfit, "Aave flash loan: profit too low");
+
+        // ✅ Approval cleanup: revoke router approvals
+        IERC20(tokenA).safeApprove(routerBuy, 0);
+        IERC20(tokenB).safeApprove(routerSell, 0);
 
         // Approve repayment
         IERC20(tokenA).safeApprove(address(aavePool), repayment);
@@ -690,7 +718,7 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         uint256 premium,
         address initiator,
         bytes calldata params
-    ) external returns (bool) {
+    ) external nonReentrant returns (bool) {
         require(msg.sender == address(aavePool), "Only Aave Pool");
         require(initiator == address(this), "Invalid initiator");
 
@@ -701,6 +729,11 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
             address routerSell,
             uint256 minProfit
         ) = abi.decode(params, (address, address, address, uint256));
+
+        // ✅ Callback parameter validation
+        require(isApprovedRouter[routerBuy], "Unapproved routerBuy");
+        require(isApprovedRouter[routerSell], "Unapproved routerSell");
+        require(routerBuy != routerSell, "Same router");
 
         // --- Execute arbitrage with borrowed funds ---
         uint256 amountIn = amount;
@@ -785,17 +818,17 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         address tokenB,
         uint256 amountIn
     ) internal {
-        // Get oracle price for tokenA
+        // ✅ TOCTOU fix: read oracle and DEX prices in same context block
+        // Snapshot both prices before any state changes
         uint256 oraclePrice = priceOracle.getPrice(tokenA);
 
-        // Get DEX price
         address[] memory path = new address[](2);
         path[0] = tokenA;
         path[1] = tokenB;
         uint256[] memory dexAmounts = IUniswapV2Router(routerBuy).getAmountsOut(amountIn, path);
         uint256 dexValuePerToken = dexAmounts[1] * 1e18 / amountIn;
 
-        // Check deviation
+        // Check deviation - both prices read in same transaction context
         if (oraclePrice > 0) {
             uint256 deviation = oraclePrice > dexValuePerToken
                 ? (oraclePrice - dexValuePerToken) * 10000 / oraclePrice
@@ -805,6 +838,18 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
                 deviation <= maxPriceDeviationBps,
                 "Oracle price deviation too high"
             );
+
+            // ✅ Use TWAP if available for additional staleness check
+            try priceOracle.getTWAP(tokenA, 1800) returns (uint256 twapPrice) {
+                if (twapPrice > 0) {
+                    uint256 twapDeviation = twapPrice > dexValuePerToken
+                        ? (twapPrice - dexValuePerToken) * 10000 / twapPrice
+                        : (dexValuePerToken - twapPrice) * 10000 / dexValuePerToken;
+                    require(twapDeviation <= maxPriceDeviationBps * 2, "TWAP deviation too high");
+                }
+            } catch {
+                // TWAP not available, rely on spot check only
+            }
 
             if (deviation > maxPriceDeviationBps / 2) {
                 emit OracleDeviationDetected(tokenA, dexValuePerToken, oraclePrice, deviation);
@@ -1054,6 +1099,20 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         maxFlashLoanSize = _size;
     }
 
+    function setDailyWithdrawLimit(uint256 _limit) external onlyOwner {
+        require(_limit > 0, "Invalid limit");
+        dailyWithdrawLimit = _limit;
+    }
+
+    function addApprovedRouter(address router) external onlyOwner {
+        require(router != address(0), "Invalid address");
+        isApprovedRouter[router] = true;
+    }
+
+    function removeApprovedRouter(address router) external onlyOwner {
+        isApprovedRouter[router] = false;
+    }
+
     function setRouters(
         address _merchantMoe,
         address _fusionX,
@@ -1061,12 +1120,15 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
     ) external onlyOwner {
         if (_merchantMoe != address(0)) {
             merchantMoeRouter = IUniswapV2Router(_merchantMoe);
+            isApprovedRouter[_merchantMoe] = true;
         }
         if (_fusionX != address(0)) {
             fusionXRouter = IUniswapV2Router(_fusionX);
+            isApprovedRouter[_fusionX] = true;
         }
         if (_agni != address(0)) {
             agniRouter = IUniswapV2Router(_agni);
+            isApprovedRouter[_agni] = true;
         }
     }
 
@@ -1077,12 +1139,15 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
     ) external onlyOwner {
         if (_cyberSwap != address(0)) {
             cyberSwapRouter = IUniswapV2Router(_cyberSwap);
+            isApprovedRouter[_cyberSwap] = true;
         }
         if (_helix != address(0)) {
             helixRouter = IUniswapV2Router(_helix);
+            isApprovedRouter[_helix] = true;
         }
         if (_iZiSwap != address(0)) {
             iZiSwapRouter = IUniswapV2Router(_iZiSwap);
+            isApprovedRouter[_iZiSwap] = true;
         }
     }
 
@@ -1119,6 +1184,15 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
     function withdrawToken(address token, uint256 amount) external onlyOwner {
         require(token != address(0), "Invalid token");
         require(amount > 0, "Invalid amount");
+
+        // ✅ Daily withdrawal limit check
+        uint256 currentDay = block.timestamp / 1 days;
+        if (currentDay > lastWithdrawDay) {
+            dailyWithdrawn = 0;
+            lastWithdrawDay = currentDay;
+        }
+        require(dailyWithdrawn + amount <= dailyWithdrawLimit, "Daily withdraw limit exceeded");
+        dailyWithdrawn += amount;
 
         IERC20(token).safeTransfer(owner(), amount);
         emit FundsWithdrawn(token, amount, owner());

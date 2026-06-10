@@ -287,7 +287,7 @@ contract FlashLoanArb is IFlashLoanReceiver, ReentrancyGuard, Ownable {
         uint256[] calldata premiums,
         address initiator,
         bytes calldata params
-    ) external override returns (bool) {
+    ) external override nonReentrant returns (bool) {
         require(msg.sender == address(aavePool), "FlashLoanArb: caller must be pool");
         require(initiator == address(this), "FlashLoanArb: invalid initiator");
         // ✅ 新增数组长度校验
@@ -324,6 +324,11 @@ contract FlashLoanArb is IFlashLoanReceiver, ReentrancyGuard, Ownable {
             uint256 minAmountOutA,   // ← 新增
             uint256 minAmountOutB    // ← 新增
         ) = abi.decode(params, (address, address, address[], address[], uint256, uint256, uint256));
+
+        // ✅ Validate decoded parameters
+        require(approvedRouters[routerA], "FlashLoanArb: unapproved routerA in callback");
+        require(approvedRouters[routerB], "FlashLoanArb: unapproved routerB in callback");
+        require(routerA != routerB, "FlashLoanArb: same router");
 
         // Step 1: Swap on routerA (token -> intermediate)
         IERC20(token).forceApprove(routerA, amount);
