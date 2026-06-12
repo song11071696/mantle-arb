@@ -1,0 +1,46 @@
+{
+  "project": "MantleArb",
+  "version": "0.1.0-prototype",
+  "description": "Open-source arbitrage agent prototype for Mantle Network",
+
+  "network": {
+    "rpcUrl": "https://rpc.mantle.xyz",
+    "chainId": 5000
+  },
+
+  "api": {
+    "basePath": "/api/v1",
+    "port": 3000,
+    "auth": {
+      "enabled": true,
+      "tokenHeader": "Authorization"
+    }
+  },
+
+  "safety": {
+    "routerWhitelist": [
+      "0x1c8Afff8eD1e2A9D7C5c8bF7F6C5e4A2d1B0C9A8"
+    ],
+    "tokenWhitelist": [
+      "0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000",
+      "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7F4cb8"
+    ],
+    "minProfitThresholdBps": 50,
+    "maxSlippageBps": 100,
+    "maxGasCostWei": "100000000000000000",
+    "requireProfitCheck": true
+  },
+
+  "ai": {
+    "enabled": true,
+    "advisoryOnly": true,
+    "model": "placeholder",
+    "maxRecommendationsPerCycle": 5
+  },
+
+  "execution": {
+    "mode": "manual",
+    "autoConfirm": false,
+    "maxRetries": 2
+  }
+}
