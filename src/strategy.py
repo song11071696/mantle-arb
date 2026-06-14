@@ -97,6 +97,16 @@ class Config:
         # "DAI": "<经MantleScan验证的真实地址>",
     }
 
+    # ✅ Token decimals — critical for correct price calculation
+    TOKEN_DECIMALS = {
+        "MNT": 18,
+        "USDC": 6,
+        "USDT": 6,
+        "WETH": 18,
+        "WMNT": 18,
+        "WBTC": 8,
+    }
+
     # ⬇️ 新增：Chainlink Oracle地址
     CHAINLINK_ORACLES = {
         "ETH/USD": "0x6351C04E7A86C2C7a88B5Bb48E2b46bEf46e45C8",
@@ -261,7 +271,7 @@ class DEXPriceFetcher:
             except Exception as e:
                 logger.warning(f"Failed to initialize {dex_type.value} router: {e}")
 
-    def get_price(self, dex_type: DEXType, token_in: str, token_out: str, amount_in: int) -> Optional[float]:
+    def get_price(self, dex_type: DEXType, token_in: str, token_out: str, amount_in: int, decimals_out: int = 18) -> Optional[float]:
         """Get price from a specific DEX with caching"""
         # Check cache
         cache_key = f"{dex_type.value}:{token_in}:{token_out}:{amount_in}"
@@ -281,7 +291,8 @@ class DEXPriceFetcher:
                 Web3.to_checksum_address(token_out)
             ]
             amounts = router.functions.getAmountsOut(amount_in, path).call()
-            price = amounts[1] / 1e18
+            # ✅ Use correct decimals for output token instead of hardcoded 1e18
+            price = amounts[1] / (10 ** decimals_out)
 
             # Update cache
             self.price_cache[cache_key] = (price, now)
@@ -295,9 +306,12 @@ class DEXPriceFetcher:
         prices = {}
         timestamp = int(time.time())
         block_number = self.w3.eth.block_number
+        # ✅ Determine output token decimals for correct price calculation
+        token_out_name = next((name for name, addr in Config.TOKENS.items() if addr.lower() == token_out.lower()), None)
+        decimals_out = Config.TOKEN_DECIMALS.get(token_out_name, 18) if token_out_name else 18
 
         for dex_type in self.routers:
-            price = self.get_price(dex_type, token_in, token_out, amount_in)
+            price = self.get_price(dex_type, token_in, token_out, amount_in, decimals_out)
             if price:
                 prices[dex_type] = PriceData(
                     token_pair=f"{token_in}/{token_out}",

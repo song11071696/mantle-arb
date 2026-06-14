@@ -182,6 +182,19 @@ async function main() {
   console.log("  OK  MantleArb deployed to:", contractAddress);
   console.log();
 
+  // ── Deploy FlashLoanArb ─────────────────────────────────────────────
+  console.log("Deploying FlashLoanArb contract...");
+  const FlashLoanArb = await ethers.getContractFactory("FlashLoanArb");
+  const aavePoolForFlash = config.flashLoanProviders.aavePool || ethers.ZeroAddress;
+  const flashLoanArb = await FlashLoanArb.deploy(
+    aavePoolForFlash,
+    deployer.address
+  );
+  await flashLoanArb.waitForDeployment();
+  const flashLoanArbAddress = await flashLoanArb.getAddress();
+  console.log("  OK  FlashLoanArb deployed to:", flashLoanArbAddress);
+  console.log();
+
   // ── Wait for confirmations ───────────────────────────────────────────────
   const deployTx = mantleArb.deploymentTransaction();
   let receipt = null;
@@ -232,6 +245,7 @@ async function main() {
     network:          network.name,
     chainId:          Number(chainId),
     contractAddress,
+    flashLoanArbAddress,
     deployer:         deployer.address,
     routers:          config.routers,
     flashLoanProviders: config.flashLoanProviders,

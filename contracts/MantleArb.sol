@@ -244,9 +244,9 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         if (_merchantMoe != address(0)) { merchantMoeRouter = IUniswapV2Router(_merchantMoe); isApprovedRouter[_merchantMoe] = true; }
         if (_fusionX != address(0)) { fusionXRouter = IUniswapV2Router(_fusionX); isApprovedRouter[_fusionX] = true; }
         if (_agni != address(0)) { agniRouter = IUniswapV2Router(_agni); isApprovedRouter[_agni] = true; }
-        if (_cyberSwap != address(0)) cyberSwapRouter = IUniswapV2Router(_cyberSwap);
-        if (_helix != address(0)) helixRouter = IUniswapV2Router(_helix);
-        if (_iZiSwap != address(0)) iZiSwapRouter = IUniswapV2Router(_iZiSwap);
+        if (_cyberSwap != address(0)) { cyberSwapRouter = IUniswapV2Router(_cyberSwap); isApprovedRouter[_cyberSwap] = true; }
+        if (_helix != address(0)) { helixRouter = IUniswapV2Router(_helix); isApprovedRouter[_helix] = true; }
+        if (_iZiSwap != address(0)) { iZiSwapRouter = IUniswapV2Router(_iZiSwap); isApprovedRouter[_iZiSwap] = true; }
         if (_balancerVault != address(0)) balancerVault = IBalancerVault(_balancerVault);
         if (_aavePool != address(0)) aavePool = IAaveV3Pool(_aavePool);
         priceOracle = IPriceOracle(_priceOracle);
@@ -475,10 +475,9 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         uint256 initialBalance = IERC20(opp.tokenA).balanceOf(address(this));
         require(initialBalance >= opp.amountIn, "Insufficient balance");
 
-        // Oracle price manipulation check
-        if (address(priceOracle) != address(0)) {
-            _checkOraclePrice(opp.tokenA, opp.routerBuy, opp.tokenB, opp.amountIn);
-        }
+        // ✅ Oracle price manipulation check — mandatory
+        require(address(priceOracle) != address(0), "Price oracle not configured");
+        _checkOraclePrice(opp.tokenA, opp.routerBuy, opp.tokenB, opp.amountIn);
 
         // Approve tokens (exact amount, not max)
         IERC20(opp.tokenA).safeApprove(opp.routerBuy, opp.amountIn);
@@ -558,10 +557,9 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
 
         _resetDailyCount();
 
-        // Oracle check
-        if (address(priceOracle) != address(0)) {
-            _checkOraclePrice(flashOpp.tokenA, flashOpp.routerBuy, flashOpp.tokenB, flashOpp.amountIn);
-        }
+        // ✅ Oracle check — mandatory
+        require(address(priceOracle) != address(0), "Price oracle not configured");
+        _checkOraclePrice(flashOpp.tokenA, flashOpp.routerBuy, flashOpp.tokenB, flashOpp.amountIn);
 
         if (flashOpp.useBalancer) {
             require(address(balancerVault) != address(0), "Balancer not configured");
@@ -821,6 +819,7 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         // ✅ TOCTOU fix: read oracle and DEX prices in same context block
         // Snapshot both prices before any state changes
         uint256 oraclePrice = priceOracle.getPrice(tokenA);
+        require(oraclePrice > 0, "Oracle price unavailable");
 
         address[] memory path = new address[](2);
         path[0] = tokenA;
@@ -829,31 +828,43 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
         uint256 dexValuePerToken = dexAmounts[1] * 1e18 / amountIn;
 
         // Check deviation - both prices read in same transaction context
-        if (oraclePrice > 0) {
-            uint256 deviation = oraclePrice > dexValuePerToken
-                ? (oraclePrice - dexValuePerToken) * 10000 / oraclePrice
-                : (dexValuePerToken - oraclePrice) * 10000 / dexValuePerToken;
+        // ✅ Use scaled arithmetic to avoid division truncation for small values
+        uint256 deviation;
+        if (oraclePrice >= dexValuePerToken) {
+            deviation = (oraclePrice - dexValuePerToken) * 10000 / oraclePrice;
+        } else {
+            deviation = (dexValuePerToken - oraclePrice) * 10000 / dexValuePerToken;
+        }
 
-            require(
-                deviation <= maxPriceDeviationBps,
-                "Oracle price deviation too high"
-            );
+        require(
+            deviation <= maxPriceDeviationBps,
+            "Oracle price deviation too high"
+        );
 
-            // ✅ Use TWAP if available for additional staleness check
-            try priceOracle.getTWAP(tokenA, 1800) returns (uint256 twapPrice) {
-                if (twapPrice > 0) {
-                    uint256 twapDeviation = twapPrice > dexValuePerToken
-                        ? (twapPrice - dexValuePerToken) * 10000 / twapPrice
-                        : (dexValuePerToken - twapPrice) * 10000 / dexValuePerToken;
-                    require(twapDeviation <= maxPriceDeviationBps * 2, "TWAP deviation too high");
-                }
-            } catch {
-                // TWAP not available, rely on spot check only
+        // ✅ Use TWAP if available for staleness/manipulation check
+        try priceOracle.getTWAP(tokenA, 1800) returns (uint256 twapPrice) {
+            require(twapPrice > 0, "TWAP price unavailable");
+            uint256 twapDeviation;
+            if (twapPrice >= dexValuePerToken) {
+                twapDeviation = (twapPrice - dexValuePerToken) * 10000 / twapPrice;
+            } else {
+                twapDeviation = (dexValuePerToken - twapPrice) * 10000 / dexValuePerToken;
             }
-
-            if (deviation > maxPriceDeviationBps / 2) {
-                emit OracleDeviationDetected(tokenA, dexValuePerToken, oraclePrice, deviation);
+            // ✅ TWAP must also agree with spot oracle (same threshold)
+            uint256 oracleTwapDeviation;
+            if (oraclePrice >= twapPrice) {
+                oracleTwapDeviation = (oraclePrice - twapPrice) * 10000 / oraclePrice;
+            } else {
+                oracleTwapDeviation = (twapPrice - oraclePrice) * 10000 / twapPrice;
             }
+            require(twapDeviation <= maxPriceDeviationBps, "TWAP deviation too high");
+            require(oracleTwapDeviation <= maxPriceDeviationBps, "Oracle-TWAP deviation too high");
+        } catch {
+            // TWAP not available, rely on spot check only
+        }
+
+        if (deviation > maxPriceDeviationBps / 2) {
+            emit OracleDeviationDetected(tokenA, dexValuePerToken, oraclePrice, deviation);
         }
     }
 
@@ -1213,12 +1224,15 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
      * @dev Withdraws all known tokens and ETH to the owner
      */
     function emergencyWithdrawAll(address[] calldata additionalTokens) external onlyOwner {
+        uint256 totalWithdrawn = 0;
+
         // Withdraw all known tokens
         for (uint256 i = 0; i < knownTokens.length; i++) {
             uint256 balance = IERC20(knownTokens[i]).balanceOf(address(this));
             if (balance > 0) {
                 IERC20(knownTokens[i]).safeTransfer(owner(), balance);
                 emit FundsWithdrawn(knownTokens[i], balance, owner());
+                totalWithdrawn++;
             }
         }
 
@@ -1229,8 +1243,14 @@ contract MantleArb is ReentrancyGuard, Pausable, Ownable {
                 if (balance > 0) {
                     IERC20(additionalTokens[i]).safeTransfer(owner(), balance);
                     emit FundsWithdrawn(additionalTokens[i], balance, owner());
+                    totalWithdrawn++;
                 }
             }
+        }
+
+        // ✅ Emit event even if no tokens withdrawn (prevents silent no-op)
+        if (totalWithdrawn == 0 && knownTokens.length == 0 && additionalTokens.length == 0) {
+            emit RiskTriggered("emergencyWithdrawAll called with empty token arrays", 0);
         }
 
         // Revoke all approvals

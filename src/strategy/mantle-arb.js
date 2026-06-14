@@ -27,12 +27,21 @@ class MantleArbStrategy {
     this.dailyPnl = 0;
     this.lastTradeTime = new Map();
     this.tradeHistory = [];
+    this.lastResetDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   }
 
   /**
    * 主策略循环 — 扫描套利机会并执行
    */
   async executeStrategy(tokenPairs) {
+    // ✅ Reset daily trade counter at midnight
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== this.lastResetDate) {
+      this.tradeCount = 0;
+      this.dailyPnl = 0;
+      this.lastResetDate = today;
+    }
+
     if (this.tradeCount >= this.config.maxDailyTrades) {
       return { action: 'skip', reason: 'daily_limit_reached' };
     }
@@ -86,13 +95,18 @@ class MantleArbStrategy {
     const [tokenA, tokenB] = opportunity.pair.split('/');
     const minProfit = tradeSize * (opportunity.spreadPercent / 100) * (1 - this.config.maxSlippageBps / 10000);
 
+    // ✅ Use precise integer arithmetic instead of float truncation
+    // Convert USD amounts to wei (18 decimals) using BigInt to avoid precision loss
+    const amountInWei = BigInt(Math.round(tradeSize * 1e6)) * 1000000000000n; // 1e6 -> 1e18
+    const minProfitWei = BigInt(Math.round(minProfit * 1e6)) * 1000000000000n;
+
     return {
       tokenA,
       tokenB,
-      amountIn: ethers.utils.parseEther(tradeSize.toFixed(6)),
+      amountIn: amountInWei,
       buyRouter: this._getRouter(opportunity.buyFrom),
       sellRouter: this._getRouter(opportunity.sellTo),
-      minProfitOut: ethers.utils.parseEther(minProfit.toFixed(6)),
+      minProfitOut: minProfitWei,
       deadline: Math.floor(Date.now() / 1000) + 300,
       gasLimit: this.config.mantelGasPrice ? 300000 : 500000,
       gasPrice: ethers.utils.parseUnits(this.config.mantelGasPrice, 'gwei'),
